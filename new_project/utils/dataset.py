@@ -53,10 +53,8 @@ class SpectraDataset(Dataset):
             df["continuous_raman"].values
         )
 
-        X = np.concatenate(
-            [ir, raman],
-            axis=1
-        )
+        self.ir = ir.astype(np.float32)
+        self.raman = raman.astype(np.float32)
 
         X = np.log1p(X)
 
@@ -92,9 +90,16 @@ class SpectraDataset(Dataset):
     def __len__(self):
         return len(self.X)
 
-    def __getitem__(self, idx):
+#    def __getitem__(self, idx):
 
+        #return (
+        #    torch.tensor(self.X[idx]),
+        #    torch.tensor(self.Y[idx])
+        #)
+
+     def __getitem__(self, idx):
         return (
-            torch.tensor(self.X[idx]),
+            torch.tensor(self.ir[idx]),
+            torch.tensor(self.raman[idx]),
             torch.tensor(self.Y[idx])
         )
