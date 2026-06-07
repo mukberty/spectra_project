@@ -1,9 +1,7 @@
-import numpy as np
+import torch
 
-train_idx = np.load("data/splits/train_indices.npy")
-test_idx = np.load("data/splits/test_indices.npy")
+ckpt = torch.load("checkpoints/molclip.pt", map_location="cpu")
 
-print(len(train_idx))
-print(len(test_idx))
-print(train_idx[:5])
-print(test_idx[:5])
+for k, v in ckpt.items():
+    if "token_emb" in k:
+        print(k, v.shape)

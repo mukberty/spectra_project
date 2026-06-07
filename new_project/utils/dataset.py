@@ -92,12 +92,13 @@ class SpectraDataset(Dataset):
 
 #    def __getitem__(self, idx):
 
-        #return (
+        # return (
         #    torch.tensor(self.X[idx]),
         #    torch.tensor(self.Y[idx])
-        #)
+        # )
 
-     def __getitem__(self, idx):
+    def __getitem__(self, idx):
+
         return (
             torch.tensor(self.ir[idx]),
             torch.tensor(self.raman[idx]),
