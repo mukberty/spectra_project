@@ -1,129 +1,109 @@
 import torch
 import numpy as np
 import faiss
-import pandas as pd
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
-from models.spectra_cnn import SpectraCNN
+from models.molclip_model import MolCLIP
+from utils.image_retrieval_dataset import ImageRetrievalDataset
+from utils.smiles_tokenizer import SmilesTokenizer
 
 
-# ----------------------------
-# DEVICE
-# ----------------------------
+# -------------------
+# device
+# -------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using:", device)
 
 
-# ----------------------------
-# LOAD DATA
-# ----------------------------
-df = pd.read_parquet("data/processed/curated_subset_named.parquet")
+# -------------------
+# dataset (TEST SPLIT ONLY)
+# -------------------
+dataset = ImageRetrievalDataset(
+    parquet_path="data/processed/curated_subset_named.parquet",
+    image_dir="data/plots/continuous_spectra",
+    mode="test"
+)
 
-train_idx = np.load("data/splits/train_indices.npy")
-test_idx = np.load("data/splits/test_indices.npy")
+loader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=2)
 
-train_df = df.iloc[train_idx].reset_index(drop=True)
-test_df = df.iloc[test_idx].reset_index(drop=True)
-
-
-# ----------------------------
-# DATASET (SPECTRA ONLY)
-# ----------------------------
-class SpectraDataset(Dataset):
-    def __init__(self, df):
-        self.x = np.stack(df["continuous_ir"].values).astype(np.float32)
-        self.y = np.stack(df["continuous_raman"].values).astype(np.float32)
-        self.smiles = df["smiles"].values
-
-    def __len__(self):
-        return len(self.smiles)
-
-    def __getitem__(self, idx):
-        ir = torch.tensor(self.x[idx])
-        raman = torch.tensor(self.y[idx])
-        smiles = self.smiles[idx]
-        return ir, raman, smiles
+print("Dataset size:", len(dataset))
 
 
-train_loader = DataLoader(SpectraDataset(train_df), batch_size=64, shuffle=False)
-test_loader = DataLoader(SpectraDataset(test_df), batch_size=64, shuffle=False)
+# -------------------
+# load model (IMPORTANT FIX)
+# -------------------
+ckpt = torch.load("checkpoints/molclip_aligned.pt", map_location=device)
 
+# build vocab from dataset (must match training)
+all_smiles = dataset.df["smiles"].astype(str).tolist()
+tokenizer = SmilesTokenizer(all_smiles, max_len=128)
 
-# ----------------------------
-# MODEL (SPECTRA CNN)
-# ----------------------------
-model = SpectraCNN(embed_dim=256).to(device)
-
-ckpt = torch.load("checkpoints/molclip.pt", map_location=device)
-
-# NOTE: if checkpoint contains full MolCLIP, extract only spectra encoder if needed
-if "spectra_encoder" in ckpt:
-    model.load_state_dict(ckpt["spectra_encoder"])
-else:
-    model.load_state_dict(ckpt)
-
+model = MolCLIP(vocab_size=tokenizer.vocab_size).to(device)
+model.load_state_dict(ckpt, strict=True)
 model.eval()
 
 
-# ----------------------------
-# BUILD FAISS INDEX (TRAIN)
-# ----------------------------
-train_embeddings = []
-train_ids = []
+# -------------------
+# load FAISS index
+# -------------------
+index = faiss.read_index("checkpoints/molclip.index")
+ids = np.load("checkpoints/molclip_ids.npy", allow_pickle=True)
 
-with torch.no_grad():
-    for ir, raman, smiles in train_loader:
-        ir = ir.to(device)
-        raman = raman.to(device)
-
-        emb = model(ir)
-
-        train_embeddings.append(emb.cpu().numpy())
-        train_ids.extend(smiles)
+print("Index size:", index.ntotal)
 
 
-train_embeddings = np.vstack(train_embeddings).astype("float32")
+# -------------------
+# embedding function
+# -------------------
+def embed(ir, ram):
+    ir = ir.to(device)
+    ram = ram.to(device)
+    with torch.no_grad():
+        z = model.encode_image(ir, ram)
+    return z.cpu().numpy().astype("float32")
 
-faiss.normalize_L2(train_embeddings)
 
-index = faiss.IndexFlatIP(train_embeddings.shape[1])
-index.add(train_embeddings)
-
-
-# ----------------------------
-# EVALUATION
-# ----------------------------
+# -------------------
+# evaluation loop
+# -------------------
 top1 = 0
 top5 = 0
 total = 0
 
-with torch.no_grad():
-    for ir, raman, smiles in test_loader:
+print("\nSTARTING EVALUATION...\n")
 
-        ir = ir.to(device)
-        raman = raman.to(device)
+for i, (ir, ram, mol_id) in enumerate(loader):
 
-        query = model(ir)
-        query = query.cpu().numpy().astype("float32")
+    emb = embed(ir, ram)
 
-        faiss.normalize_L2(query)
+    _, topk = index.search(emb, 5)
 
-        scores, idx = index.search(query, 5)
+    for j in range(len(mol_id)):
 
-        for i in range(len(smiles)):
-            true = smiles[i]
-            retrieved = [train_ids[j] for j in idx[i]]
+        total += 1
 
-            if true == retrieved[0]:
-                top1 += 1
+        true = mol_id[j]
+        retrieved = [ids[x] for x in topk[j]]
 
-            if true in retrieved:
-                top5 += 1
+        if i == 0 and j < 3:
+            print("\nDEBUG SAMPLE")
+            print("TRUE:", true)
+            print("TOP5:", retrieved)
 
-            total += 1
+        if retrieved[0] == true:
+            top1 += 1
+
+        if true in retrieved:
+            top5 += 1
 
 
-print("\n===== FINAL RESULTS =====")
-print(f"Top-1 Accuracy: {top1/total:.4f}")
-print(f"Top-5 Accuracy: {top5/total:.4f}")
-print(f"Total samples: {total}")
+# -------------------
+# results
+# -------------------
+print("\n===== FINAL =====")
+print("Top-1:", top1)
+print("Top-5:", top5)
+print("Total:", total)
+
+print("\nTop-1 Acc:", top1 / total if total else 0)
+print("Top-5 Acc:", top5 / total if total else 0)

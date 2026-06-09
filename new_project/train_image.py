@@ -6,55 +6,85 @@ from models.image_cnn import ImageCNN
 from utils.image_retrieval_dataset import ImageRetrievalDataset
 
 
+# -----------------------
+# setup
+# -----------------------
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using:", device)
+
+torch.cuda.empty_cache()
+
 
 dataset = ImageRetrievalDataset(
     parquet_path="data/processed/curated_subset_named.parquet",
     image_dir="data/plots/continuous_spectra"
 )
 
-loader = DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
+
+# 🔥 REDUCED BATCH SIZE (CRITICAL FIX)
+loader = DataLoader(
+    dataset,
+    batch_size=32,   # was 128
+    shuffle=True,
+    drop_last=True,
+    num_workers=2,
+    pin_memory=True
+)
 
 
 model = ImageCNN(embed_dim=256).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=3e-4,
+    weight_decay=1e-4
+)
 
 
-def contrastive_loss(ir_emb, raman_emb, temp=0.1):
+# -----------------------
+# CLIP LOSS (STABLE)
+# -----------------------
 
-    ir_emb = F.normalize(ir_emb, dim=1)
-    raman_emb = F.normalize(raman_emb, dim=1)
+def clip_loss(z_ir, z_raman, temp=0.07):
 
-    logits = torch.matmul(ir_emb, raman_emb.T) / temp
-    targets = torch.arange(ir_emb.size(0)).to(ir_emb.device)
+    z_ir = F.normalize(z_ir, dim=1)
+    z_raman = F.normalize(z_raman, dim=1)
 
-    loss_ir_to_ram = F.cross_entropy(logits, targets)
-    loss_ram_to_ir = F.cross_entropy(logits.T, targets)
+    logits = (z_ir @ z_raman.T) / temp
 
-    return (loss_ir_to_ram + loss_ram_to_ir) / 2
+    labels = torch.arange(z_ir.size(0), device=z_ir.device)
+
+    loss_i = F.cross_entropy(logits, labels)
+    loss_r = F.cross_entropy(logits.T, labels)
+
+    return (loss_i + loss_r) / 2
 
 
-for epoch in range(20):
+# -----------------------
+# TRAIN LOOP (MEMORY SAFE)
+# -----------------------
+
+for epoch in range(30):
 
     model.train()
     total_loss = 0
 
     for ir_img, raman_img, _ in loader:
 
-        ir_img = ir_img.to(device)
-        raman_img = raman_img.to(device)
+        ir_img = ir_img.to(device, non_blocking=True)
+        raman_img = raman_img.to(device, non_blocking=True)
 
-        # IMPORTANT FIX: get embeddings separately (correct signal)
-        ir_feat = model.backbone(ir_img)
-        raman_feat = model.backbone(raman_img)
+        # forward
+        ir_feat = model.ir_backbone(ir_img)
+        raman_feat = model.raman_backbone(raman_img)
 
-        ir_emb = model.ir_proj(ir_feat)
-        raman_emb = model.raman_proj(raman_feat)
+        z_ir = model.ir_proj(ir_feat)
+        z_raman = model.raman_proj(raman_feat)
 
-        loss = contrastive_loss(ir_emb, raman_emb)
+        loss = clip_loss(z_ir, z_raman)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
 
@@ -62,6 +92,10 @@ for epoch in range(20):
 
     print(f"epoch {epoch+1}: {total_loss/len(loader):.4f}")
 
+
+# -----------------------
+# SAVE
+# -----------------------
 
 torch.save(model.state_dict(), "checkpoints/image_retrieval.pt")
 print("saved model")

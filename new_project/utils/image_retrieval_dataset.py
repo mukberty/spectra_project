@@ -8,17 +8,26 @@ import torchvision.transforms as T
 
 class ImageRetrievalDataset(Dataset):
 
-    def __init__(self, parquet_path, image_dir):
+    def __init__(self, parquet_path, image_dir, split_ratio=None, mode="all"):
 
         self.df = pd.read_parquet(parquet_path)
         self.image_dir = image_dir
+
+        # ✅ SIMPLE SPLIT (NO COLUMN REQUIRED)
+        if split_ratio is not None:
+            n = len(self.df)
+            split = int(n * (1 - split_ratio))
+
+            if mode == "train":
+                self.df = self.df.iloc[:split].reset_index(drop=True)
+            elif mode == "test":
+                self.df = self.df.iloc[split:].reset_index(drop=True)
 
         self.transform = T.Compose([
             T.Resize((224, 224)),
             T.ToTensor()
         ])
 
-        # molecule id = row index OR explicit column
         if "molecule_name" in self.df.columns:
             self.ids = self.df["molecule_name"].values
         else:

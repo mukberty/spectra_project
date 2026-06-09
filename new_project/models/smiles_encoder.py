@@ -15,13 +15,13 @@ class SmilesEncoder(nn.Module):
     ):
         super().__init__()
 
-        self.token_emb = nn.Embedding(
-            vocab_size,
-            hidden_dim
-        )
+        self.hidden_dim = hidden_dim
+        self.max_len = max_len
+
+        self.token_emb = nn.Embedding(vocab_size, hidden_dim)
 
         self.pos_emb = nn.Parameter(
-            torch.randn(1, max_len, hidden_dim)
+            torch.randn(1, max_len, hidden_dim) * 0.01
         )
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -35,12 +35,11 @@ class SmilesEncoder(nn.Module):
             num_layers=num_layers
         )
 
-        self.proj = nn.Linear(
-            hidden_dim,
-            embed_dim
-        )
+        self.proj = nn.Linear(hidden_dim, embed_dim)
 
     def forward(self, x):
+
+        # x: [B, L] token ids
 
         x = self.token_emb(x)
 
