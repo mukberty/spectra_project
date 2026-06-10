@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import pickle
 
 from models.molclip_model import MolCLIP
 from utils.image_retrieval_dataset import ImageRetrievalDataset
@@ -19,7 +20,8 @@ print("Using:", device)
 # -----------------------
 dataset = ImageRetrievalDataset(
     parquet_path="data/processed/curated_subset_named.parquet",
-    image_dir="data/plots/continuous_spectra"
+    image_dir="data/plots/continuous_spectra",
+    mode="all"
 )
 
 loader = DataLoader(
@@ -33,12 +35,19 @@ loader = DataLoader(
 
 
 # -----------------------
-# tokenizer (IMPORTANT FIX)
+# tokenizer (TRAIN ONLY SOURCE OF TRUTH)
 # -----------------------
 all_smiles = dataset.df["smiles"].astype(str).tolist()
 tokenizer = SmilesTokenizer(all_smiles, max_len=128)
 
 vocab_size = tokenizer.vocab_size
+
+
+# SAVE TOKENIZER (CRITICAL FIX)
+with open("checkpoints/tokenizer.pkl", "wb") as f:
+    pickle.dump(tokenizer, f)
+
+print("[INFO] tokenizer saved")
 
 
 # -----------------------
@@ -53,43 +62,37 @@ optimizer = torch.optim.AdamW(
 )
 
 
-# -----------------------
-# contrastive loss (INFO NCE)
-# -----------------------
-def contrastive_loss(z1, z2, temperature=0.07):
+def contrastive_loss(z_img, z_txt, temperature=0.05):
 
-    z1 = F.normalize(z1, dim=1)
-    z2 = F.normalize(z2, dim=1)
+    z_img = F.normalize(z_img, dim=1)
+    z_txt = F.normalize(z_txt, dim=1)
 
-    logits = (z1 @ z2.T) / temperature
+    logits = (z_img @ z_txt.T) / temperature
+    labels = torch.arange(z_img.size(0), device=z_img.device)
 
-    labels = torch.arange(z1.size(0), device=z1.device)
+    loss_img = F.cross_entropy(logits, labels)
+    loss_txt = F.cross_entropy(logits.T, labels)
 
-    loss_i = F.cross_entropy(logits, labels)
-    loss_t = F.cross_entropy(logits.T, labels)
-
-    return (loss_i + loss_t) / 2
+    return (loss_img + loss_txt) / 2
 
 
 # -----------------------
-# training loop
+# training
 # -----------------------
 epochs = 10
 
 for epoch in range(epochs):
 
     model.train()
-    total_loss = 0.0
+    total_loss = 0
 
     for ir_img, raman_img, smiles in loader:
 
         ir_img = ir_img.to(device)
         raman_img = raman_img.to(device)
 
-        # FIXED: proper tokenization pipeline
         smiles = tokenizer.batch_encode(smiles).to(device)
 
-        # forward
         z_img = model.encode_image(ir_img, raman_img)
         z_txt = model.encode_smiles(smiles)
 
@@ -101,12 +104,8 @@ for epoch in range(epochs):
 
         total_loss += loss.item()
 
-    avg_loss = total_loss / len(loader)
-    print(f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f}")
+    print(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/len(loader):.4f}")
 
 
-# -----------------------
-# save model
-# -----------------------
 torch.save(model.state_dict(), "checkpoints/molclip_aligned.pt")
-print("\nSaved molclip_aligned.pt")
+print("Saved molclip_aligned.pt")

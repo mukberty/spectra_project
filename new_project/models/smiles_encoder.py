@@ -4,51 +4,45 @@ import torch.nn as nn
 
 class SmilesEncoder(nn.Module):
 
-    def __init__(
-        self,
-        vocab_size,
-        embed_dim=256,
-        max_len=256,
-        hidden_dim=256,
-        num_layers=4,
-        num_heads=8
-    ):
+    def __init__(self, vocab_size, embed_dim=256, max_len=128):
         super().__init__()
 
-        self.hidden_dim = hidden_dim
-        self.max_len = max_len
-
-        self.token_emb = nn.Embedding(vocab_size, hidden_dim)
-
-        self.pos_emb = nn.Parameter(
-            torch.randn(1, max_len, hidden_dim) * 0.01
-        )
+        self.token_emb = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+        self.pos_emb = nn.Embedding(max_len, embed_dim)
 
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
+            d_model=embed_dim,
+            nhead=4,
+            dim_feedforward=512,
+            dropout=0.1,
             batch_first=True
         )
 
-        self.transformer = nn.TransformerEncoder(
+        self.encoder = nn.TransformerEncoder(
             encoder_layer,
-            num_layers=num_layers
+            num_layers=3
         )
 
-        self.proj = nn.Linear(hidden_dim, embed_dim)
+        self.proj = nn.Linear(embed_dim, embed_dim)
+
+        self.max_len = max_len
 
     def forward(self, x):
+        """
+        x: (B, L) tokenized SMILES
+        """
 
-        # x: [B, L] token ids
+        B, L = x.shape
+        L = min(L, self.max_len)
 
-        x = self.token_emb(x)
+        x = x[:, :L]
 
-        x = x + self.pos_emb[:, :x.shape[1]]
+        pos = torch.arange(L, device=x.device).unsqueeze(0).expand(B, L)
 
-        x = self.transformer(x)
+        h = self.token_emb(x) + self.pos_emb(pos)
 
-        x = x.mean(dim=1)
+        h = self.encoder(h)
 
-        x = self.proj(x)
+        h = h.mean(dim=1)
 
-        return x
+        return self.proj(h)

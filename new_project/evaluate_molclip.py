@@ -5,56 +5,56 @@ from torch.utils.data import DataLoader
 
 from models.molclip_model import MolCLIP
 from utils.image_retrieval_dataset import ImageRetrievalDataset
-from utils.smiles_tokenizer import SmilesTokenizer
 
 
-# -------------------
-# device
-# -------------------
+# -----------------------
+# DEVICE
+# -----------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using:", device)
 
 
-# -------------------
-# dataset (TEST SPLIT ONLY)
-# -------------------
+# -----------------------
+# DATASET (TEST ONLY)
+# -----------------------
 dataset = ImageRetrievalDataset(
     parquet_path="data/processed/curated_subset_named.parquet",
     image_dir="data/plots/continuous_spectra",
-    mode="test"
+    mode="all"
 )
 
 loader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=2)
 
-print("Dataset size:", len(dataset))
+print("[Dataset] Size:", len(dataset))
 
 
-# -------------------
-# load model (IMPORTANT FIX)
-# -------------------
+# -----------------------
+# LOAD CHECKPOINT
+# -----------------------
 ckpt = torch.load("checkpoints/molclip_aligned.pt", map_location=device)
 
-# build vocab from dataset (must match training)
-all_smiles = dataset.df["smiles"].astype(str).tolist()
-tokenizer = SmilesTokenizer(all_smiles, max_len=128)
+vocab_size = ckpt["smiles_encoder.token_emb.weight"].shape[0]
 
-model = MolCLIP(vocab_size=tokenizer.vocab_size).to(device)
-model.load_state_dict(ckpt, strict=True)
+model = MolCLIP(vocab_size=vocab_size).to(device)
+model.load_state_dict(ckpt, strict=False)
 model.eval()
 
+print("Loaded checkpoint keys:", len(ckpt.keys()))
 
-# -------------------
-# load FAISS index
-# -------------------
+
+# -----------------------
+# FAISS INDEX
+# -----------------------
 index = faiss.read_index("checkpoints/molclip.index")
 ids = np.load("checkpoints/molclip_ids.npy", allow_pickle=True)
+print(ids[:10])
 
 print("Index size:", index.ntotal)
 
 
-# -------------------
-# embedding function
-# -------------------
+# -----------------------
+# ENCODER
+# -----------------------
 def embed(ir, ram):
     ir = ir.to(device)
     ram = ram.to(device)
@@ -63,32 +63,33 @@ def embed(ir, ram):
     return z.cpu().numpy().astype("float32")
 
 
-# -------------------
-# evaluation loop
-# -------------------
+# -----------------------
+# EVAL METRICS
+# -----------------------
 top1 = 0
 top5 = 0
 total = 0
 
-print("\nSTARTING EVALUATION...\n")
+print("\nSTARTING EVAL...\n")
+
 
 for i, (ir, ram, mol_id) in enumerate(loader):
 
     emb = embed(ir, ram)
-
     _, topk = index.search(emb, 5)
 
     for j in range(len(mol_id)):
 
         total += 1
 
-        true = mol_id[j]
-        retrieved = [ids[x] for x in topk[j]]
+        true = str(mol_id[j])
+        retrieved = [str(ids[x]) for x in topk[j]]
 
         if i == 0 and j < 3:
             print("\nDEBUG SAMPLE")
-            print("TRUE:", true)
-            print("TOP5:", retrieved)
+            print("TRUE:", repr(true))
+            print("TOP5:", [repr(x) for x in retrieved])
+            print("MATCH:", true in retrieved)
 
         if retrieved[0] == true:
             top1 += 1
@@ -97,13 +98,18 @@ for i, (ir, ram, mol_id) in enumerate(loader):
             top5 += 1
 
 
-# -------------------
-# results
-# -------------------
+# -----------------------
+# FINAL RESULTS
+# -----------------------
 print("\n===== FINAL =====")
 print("Top-1:", top1)
 print("Top-5:", top5)
 print("Total:", total)
 
-print("\nTop-1 Acc:", top1 / total if total else 0)
+print("Top-1 Acc:", top1 / total if total else 0)
 print("Top-5 Acc:", top5 / total if total else 0)
+
+print(dataset[0][2])
+print(dataset[1][2])
+print(dataset[2][2])
+
