@@ -37,11 +37,23 @@ with open("checkpoints/tokenizer.pkl", "rb") as f:
 # -----------------------
 # model
 # -----------------------
-ckpt = torch.load("checkpoints/molclip_aligned.pt", map_location=device)
+ckpt = torch.load(
+    "checkpoints/best_model.pt",
+    map_location=device
+)
 
-model = MolCLIP(vocab_size=tokenizer.vocab_size).to(device)
-model.load_state_dict(ckpt, strict=True)
+model = MolCLIP(
+    vocab_size=ckpt["vocab_size"]
+).to(device)
+
+model.load_state_dict(
+    ckpt["model_state_dict"]
+)
+
 model.eval()
+
+print("Loaded epoch:", ckpt["epoch"])
+print("Saved loss:", ckpt["loss"])
 
 
 # -----------------------

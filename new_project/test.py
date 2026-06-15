@@ -1,16 +1,8 @@
-import pandas as pd
+import torch
 
-df = pd.read_parquet(
-    "data/processed/curated_subset_named.parquet"
+ckpt = torch.load(
+    "checkpoints/best_model.pt",
+    map_location="cpu"
 )
 
-split = int(len(df) * 0.8)
-
-train = set(df.iloc[:split]["smiles"])
-test = set(df.iloc[split:]["smiles"])
-
-overlap = train & test
-
-print("Train unique:", len(train))
-print("Test unique:", len(test))
-print("Overlap:", len(overlap))
+print(ckpt.keys())

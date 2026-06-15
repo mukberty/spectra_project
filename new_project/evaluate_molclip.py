@@ -1,115 +1,203 @@
-import torch
+import pickle
 import numpy as np
 import faiss
+import torch
+
 from torch.utils.data import DataLoader
+from torch.utils.data import Subset
 
 from models.molclip_model import MolCLIP
 from utils.image_retrieval_dataset import ImageRetrievalDataset
 
 
-# -----------------------
+# =====================================================
 # DEVICE
-# -----------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# =====================================================
+
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
 print("Using:", device)
 
 
-# -----------------------
-# DATASET (TEST ONLY)
-# -----------------------
-dataset = ImageRetrievalDataset(
+# =====================================================
+# DATASET
+# =====================================================
+
+full_dataset = ImageRetrievalDataset(
     parquet_path="data/processed/curated_subset_named.parquet",
     image_dir="data/plots/continuous_spectra",
     mode="all"
 )
 
-loader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=2)
+test_idx = np.load(
+    "checkpoints/test_indices.npy"
+)
 
-print("[Dataset] Size:", len(dataset))
+dataset = Subset(
+    full_dataset,
+    test_idx
+)
+
+loader = DataLoader(
+    dataset,
+    batch_size=16,
+    shuffle=False,
+    num_workers=2
+)
+
+print("Test molecules:", len(dataset))
 
 
-# -----------------------
-# LOAD CHECKPOINT
-# -----------------------
-ckpt = torch.load("checkpoints/molclip_aligned.pt", map_location=device)
+# =====================================================
+# TOKENIZER
+# =====================================================
 
-vocab_size = ckpt["smiles_encoder.token_emb.weight"].shape[0]
+with open(
+    "checkpoints/tokenizer.pkl",
+    "rb"
+) as f:
 
-model = MolCLIP(vocab_size=vocab_size).to(device)
-model.load_state_dict(ckpt, strict=False)
+    tokenizer = pickle.load(f)
+
+
+# =====================================================
+# MODEL
+# =====================================================
+
+checkpoint = torch.load(
+    "checkpoints/best_model.pt",
+    map_location=device
+)
+
+model = MolCLIP(
+    vocab_size=checkpoint["vocab_size"]
+).to(device)
+
+model.load_state_dict(
+    checkpoint["model_state_dict"]
+)
+
 model.eval()
 
-print("Loaded checkpoint keys:", len(ckpt.keys()))
+print(
+    "Loaded model from epoch:",
+    checkpoint["epoch"]
+)
 
 
-# -----------------------
-# FAISS INDEX
-# -----------------------
-index = faiss.read_index("checkpoints/molclip.index")
-ids = np.load("checkpoints/molclip_ids.npy", allow_pickle=True)
-print(ids[:10])
+# =====================================================
+# FAISS
+# =====================================================
 
-print("Index size:", index.ntotal)
+index = faiss.read_index(
+    "checkpoints/molclip.index"
+)
+
+ids = np.load(
+    "checkpoints/molclip_ids.npy",
+    allow_pickle=True
+)
+
+print(
+    "FAISS database size:",
+    index.ntotal
+)
 
 
-# -----------------------
-# ENCODER
-# -----------------------
+# =====================================================
+# EMBED
+# =====================================================
+
 def embed(ir, ram):
+
     ir = ir.to(device)
     ram = ram.to(device)
+
     with torch.no_grad():
-        z = model.encode_image(ir, ram)
-    return z.cpu().numpy().astype("float32")
+
+        z = model.encode_image(
+            ir,
+            ram
+        )
+
+    return (
+        z.cpu()
+         .numpy()
+         .astype("float32")
+    )
 
 
-# -----------------------
-# EVAL METRICS
-# -----------------------
+# =====================================================
+# EVALUATION
+# =====================================================
+
 top1 = 0
 top5 = 0
+top10 = 0
 total = 0
 
-print("\nSTARTING EVAL...\n")
+print("\nStarting evaluation...\n")
 
+for batch in loader:
 
-for i, (ir, ram, mol_id) in enumerate(loader):
+    ir_img, raman_img, smiles = batch
 
-    emb = embed(ir, ram)
-    _, topk = index.search(emb, 5)
+    emb = embed(
+        ir_img,
+        raman_img
+    )
 
-    for j in range(len(mol_id)):
+    _, retrieved_idx = index.search(
+        emb,
+        10
+    )
+
+    for i in range(len(smiles)):
 
         total += 1
 
-        true = str(mol_id[j])
-        retrieved = [str(ids[x]) for x in topk[j]]
+        true_smiles = str(
+            smiles[i]
+        )
 
-        if i == 0 and j < 3:
-            print("\nDEBUG SAMPLE")
-            print("TRUE:", repr(true))
-            print("TOP5:", [repr(x) for x in retrieved])
-            print("MATCH:", true in retrieved)
+        retrieved = [
+            str(ids[j])
+            for j in retrieved_idx[i]
+        ]
 
-        if retrieved[0] == true:
+        if retrieved[0] == true_smiles:
             top1 += 1
 
-        if true in retrieved:
+        if true_smiles in retrieved[:5]:
             top5 += 1
 
+        if true_smiles in retrieved[:10]:
+            top10 += 1
 
-# -----------------------
-# FINAL RESULTS
-# -----------------------
-print("\n===== FINAL =====")
-print("Top-1:", top1)
-print("Top-5:", top5)
-print("Total:", total)
 
-print("Top-1 Acc:", top1 / total if total else 0)
-print("Top-5 Acc:", top5 / total if total else 0)
+# =====================================================
+# RESULTS
+# =====================================================
 
-print(dataset[0][2])
-print(dataset[1][2])
-print(dataset[2][2])
+print("\n===== TEST RESULTS =====")
 
+print(
+    f"Top-1 Accuracy : {top1/total:.4f}"
+)
+
+print(
+    f"Top-5 Accuracy : {top5/total:.4f}"
+)
+
+print(
+    f"Top-10 Accuracy: {top10/total:.4f}"
+)
+
+print()
+
+print(
+    "Queries:",
+    total
+)

@@ -1,27 +1,68 @@
+import os
+import pickle
+import numpy as np
+
 import torch
 import torch.nn.functional as F
+
 from torch.utils.data import DataLoader
-import pickle
+from torch.utils.data import Subset
+
+from sklearn.model_selection import train_test_split
 
 from models.molclip_model import MolCLIP
 from utils.image_retrieval_dataset import ImageRetrievalDataset
 from utils.smiles_tokenizer import SmilesTokenizer
 
 
-# -----------------------
-# device
-# -----------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# =====================================================
+# DEVICE
+# =====================================================
+
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
 print("Using:", device)
 
+os.makedirs("checkpoints", exist_ok=True)
 
-# -----------------------
-# dataset
-# -----------------------
-dataset = ImageRetrievalDataset(
+
+# =====================================================
+# DATASET
+# =====================================================
+
+full_dataset = ImageRetrievalDataset(
     parquet_path="data/processed/curated_subset_named.parquet",
     image_dir="data/plots/continuous_spectra",
     mode="all"
+)
+
+indices = np.arange(len(full_dataset))
+
+train_idx, test_idx = train_test_split(
+    indices,
+    test_size=0.20,
+    shuffle=True,
+    random_state=42
+)
+
+np.save(
+    "checkpoints/train_indices.npy",
+    train_idx
+)
+
+np.save(
+    "checkpoints/test_indices.npy",
+    test_idx
+)
+
+print("Train:", len(train_idx))
+print("Test :", len(test_idx))
+
+dataset = Subset(
+    full_dataset,
+    train_idx
 )
 
 loader = DataLoader(
@@ -34,26 +75,39 @@ loader = DataLoader(
 )
 
 
-# -----------------------
-# tokenizer (TRAIN ONLY SOURCE OF TRUTH)
-# -----------------------
-all_smiles = dataset.df["smiles"].astype(str).tolist()
-tokenizer = SmilesTokenizer(all_smiles, max_len=128)
+# =====================================================
+# TOKENIZER
+# =====================================================
+
+all_smiles = full_dataset.df["smiles"].astype(str).tolist()
+
+tokenizer = SmilesTokenizer(
+    all_smiles,
+    max_len=128
+)
+
+with open(
+    "checkpoints/tokenizer.pkl",
+    "wb"
+) as f:
+
+    pickle.dump(
+        tokenizer,
+        f
+    )
+
+print("[INFO] tokenizer saved")
 
 vocab_size = tokenizer.vocab_size
 
 
-# SAVE TOKENIZER (CRITICAL FIX)
-with open("checkpoints/tokenizer.pkl", "wb") as f:
-    pickle.dump(tokenizer, f)
+# =====================================================
+# MODEL
+# =====================================================
 
-print("[INFO] tokenizer saved")
-
-
-# -----------------------
-# model
-# -----------------------
-model = MolCLIP(vocab_size=vocab_size).to(device)
+model = MolCLIP(
+    vocab_size=vocab_size
+).to(device)
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
@@ -62,50 +116,140 @@ optimizer = torch.optim.AdamW(
 )
 
 
-def contrastive_loss(z_img, z_txt, temperature=0.05):
+# =====================================================
+# LOSS
+# =====================================================
 
-    z_img = F.normalize(z_img, dim=1)
-    z_txt = F.normalize(z_txt, dim=1)
+def contrastive_loss(
+    z_img,
+    z_txt,
+    temperature=0.05
+):
 
-    logits = (z_img @ z_txt.T) / temperature
-    labels = torch.arange(z_img.size(0), device=z_img.device)
+    z_img = F.normalize(
+        z_img,
+        dim=1
+    )
 
-    loss_img = F.cross_entropy(logits, labels)
-    loss_txt = F.cross_entropy(logits.T, labels)
+    z_txt = F.normalize(
+        z_txt,
+        dim=1
+    )
 
-    return (loss_img + loss_txt) / 2
+    logits = (
+        z_img @ z_txt.T
+    ) / temperature
+
+    labels = torch.arange(
+        z_img.size(0),
+        device=z_img.device
+    )
+
+    loss_img = F.cross_entropy(
+        logits,
+        labels
+    )
+
+    loss_txt = F.cross_entropy(
+        logits.T,
+        labels
+    )
+
+    return (
+        loss_img + loss_txt
+    ) / 2
 
 
-# -----------------------
-# training
-# -----------------------
-epochs = 10
+# =====================================================
+# TRAINING
+# =====================================================
+
+epochs = 200
+
+best_loss = float("inf")
 
 for epoch in range(epochs):
 
     model.train()
-    total_loss = 0
+
+    total_loss = 0.0
 
     for ir_img, raman_img, smiles in loader:
 
         ir_img = ir_img.to(device)
         raman_img = raman_img.to(device)
 
-        smiles = tokenizer.batch_encode(smiles).to(device)
+        smiles = tokenizer.batch_encode(
+            smiles
+        ).to(device)
 
-        z_img = model.encode_image(ir_img, raman_img)
-        z_txt = model.encode_smiles(smiles)
+        z_img = model.encode_image(
+            ir_img,
+            raman_img
+        )
 
-        loss = contrastive_loss(z_img, z_txt)
+        z_txt = model.encode_smiles(
+            smiles
+        )
+
+        loss = contrastive_loss(
+            z_img,
+            z_txt
+        )
 
         optimizer.zero_grad()
+
         loss.backward()
+
         optimizer.step()
 
         total_loss += loss.item()
 
-    print(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/len(loader):.4f}")
+    avg_loss = total_loss / len(loader)
+
+    print(
+        f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f}"
+    )
+
+    if avg_loss < best_loss:
+
+        best_loss = avg_loss
+
+        torch.save(
+            {
+                "epoch": epoch + 1,
+                "loss": best_loss,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "vocab_size": vocab_size
+            },
+            "checkpoints/best_model.pt"
+        )
+
+        print(
+            f"[BEST] Saved epoch {epoch+1}"
+        )
 
 
-torch.save(model.state_dict(), "checkpoints/molclip_aligned.pt")
-print("Saved molclip_aligned.pt")
+# =====================================================
+# FINAL SAVE
+# =====================================================
+
+torch.save(
+    {
+        "epoch": epochs,
+        "loss": avg_loss,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "vocab_size": vocab_size
+    },
+    "checkpoints/last_model.pt"
+)
+
+print()
+
+print("Saved:")
+print("checkpoints/best_model.pt")
+print("checkpoints/last_model.pt")
+print("checkpoints/train_indices.npy")
+print("checkpoints/test_indices.npy")

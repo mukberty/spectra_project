@@ -8,98 +8,108 @@ from utils.image_retrieval_dataset import ImageRetrievalDataset
 
 
 # -----------------------
-# setup
+# DEVICE
 # -----------------------
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using:", device)
 
+
 # -----------------------
-# load dataset + splits
+# DATASET (TEST ONLY)
 # -----------------------
-
-#df = np.load("data/processed/curated_subset_named.parquet", allow_pickle=True)
-import pandas as pd
-df = pd.read_parquet("data/processed/curated_subset_named.parquet")
-train_idx = np.load("data/splits/train_indices.npy")
-
-train_df = df.iloc[train_idx].reset_index(drop=True)
-
-# IMPORTANT: only TRAIN data goes into FAISS
-train_dataset = ImageRetrievalDataset(
+dataset = ImageRetrievalDataset(
     parquet_path="data/processed/curated_subset_named.parquet",
-    image_dir="data/plots/continuous_spectra"
+    image_dir="data/plots/continuous_spectra",
+    mode="all"
 )
 
-# filter dataset to train indices properly
-train_dataset.df = train_df
+loader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=2)
 
-loader = DataLoader(
-    train_dataset,
-    batch_size=32,
-    shuffle=False,
-    num_workers=2,
-    pin_memory=True
-)
+print("[Dataset] Size:", len(dataset))
+
 
 # -----------------------
-# load MolCLIP model
+# LOAD CHECKPOINT
 # -----------------------
-
-ckpt = torch.load("checkpoints/molclip.pt", map_location=device)
+ckpt = torch.load("checkpoints/molclip_aligned.pt", map_location=device)
 
 vocab_size = ckpt["smiles_encoder.token_emb.weight"].shape[0]
-print("Detected vocab_size:", vocab_size)
 
 model = MolCLIP(vocab_size=vocab_size).to(device)
-model.load_state_dict(ckpt, strict=True)
+model.load_state_dict(ckpt, strict=False)
 model.eval()
 
-# -----------------------
-# build embeddings
-# -----------------------
+print("Loaded checkpoint keys:", len(ckpt.keys()))
 
-all_embeddings = []
-all_ids = []
-
-with torch.no_grad():
-
-    for ir_img, raman_img, mol_id in loader:
-
-        ir_img = ir_img.to(device)
-        raman_img = raman_img.to(device)
-
-        emb = model.encode_image(ir_img, raman_img)
-
-        all_embeddings.append(emb.cpu().numpy())
-        all_ids.extend(list(mol_id))
-
-all_embeddings = np.vstack(all_embeddings).astype("float32")
-
-# normalize for cosine similarity
-faiss.normalize_L2(all_embeddings)
-
-print("Embedding shape:", all_embeddings.shape)
 
 # -----------------------
-# build FAISS index
+# FAISS INDEX
 # -----------------------
+index = faiss.read_index("checkpoints/molclip.index")
+ids = np.load("checkpoints/molclip_ids.npy", allow_pickle=True)
+print(ids[:10])
 
-dim = all_embeddings.shape[1]
+print("Index size:", index.ntotal)
 
-index = faiss.IndexFlatIP(dim)
-index.add(all_embeddings)
 
 # -----------------------
-# save
+# ENCODER
 # -----------------------
+def embed(ir, ram):
+    ir = ir.to(device)
+    ram = ram.to(device)
+    with torch.no_grad():
+        z = model.encode_image(ir, ram)
+    return z.cpu().numpy().astype("float32")
 
-import os
-os.makedirs("checkpoints", exist_ok=True)
 
-faiss.write_index(index, "checkpoints/molclip.index")
-np.save("checkpoints/molclip_ids.npy", np.array(all_ids))
+# -----------------------
+# EVAL METRICS
+# -----------------------
+top1 = 0
+top5 = 0
+total = 0
 
-print("\n✅ MOLCLIP INDEX BUILT SUCCESSFULLY")
-print("Index size:", len(all_ids))
-print("Embedding dim:", dim)
+print("\nSTARTING EVAL...\n")
+
+
+for i, (ir, ram, mol_id) in enumerate(loader):
+
+    emb = embed(ir, ram)
+    _, topk = index.search(emb, 5)
+
+    for j in range(len(mol_id)):
+
+        total += 1
+
+        true = str(mol_id[j])
+        retrieved = [str(ids[x]) for x in topk[j]]
+
+        if i == 0 and j < 3:
+            print("\nDEBUG SAMPLE")
+            print("TRUE:", repr(true))
+            print("TOP5:", [repr(x) for x in retrieved])
+            print("MATCH:", true in retrieved)
+
+        if retrieved[0] == true:
+            top1 += 1
+
+        if true in retrieved:
+            top5 += 1
+
+
+# -----------------------
+# FINAL RESULTS
+# -----------------------
+print("\n===== FINAL =====")
+print("Top-1:", top1)
+print("Top-5:", top5)
+print("Total:", total)
+
+print("Top-1 Acc:", top1 / total if total else 0)
+print("Top-5 Acc:", top5 / total if total else 0)
+
+print(dataset[0][2])
+print(dataset[1][2])
+print(dataset[2][2])
+
