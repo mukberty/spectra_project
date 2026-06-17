@@ -98,7 +98,6 @@ def generate_spectrum(freqs, intensities):
 
     return y
 
-
 # =====================================================
 # LOAD EVERYTHING
 # =====================================================
@@ -107,14 +106,14 @@ def generate_spectrum(freqs, intensities):
 def load_everything():
 
     with open(
-        "checkpoints/tokenizer.pkl",
+        "checkpoints_backup_old/tokenizer.pkl",
         "rb"
     ) as f:
 
         tokenizer = pickle.load(f)
 
     checkpoint = torch.load(
-        "checkpoints/best_model.pt",
+        "checkpoints_backup_old/best_model.pt",
         map_location=device
     )
 
@@ -129,11 +128,11 @@ def load_everything():
     model.eval()
 
     index = faiss.read_index(
-        "checkpoints/molclip.index"
+        "checkpoints_backup_old/molclip.index"
     )
 
     ids = np.load(
-        "checkpoints/molclip_ids.npy",
+        "checkpoints_backup_old/molclip_ids.npy",
         allow_pickle=True
     )
 
@@ -146,7 +145,8 @@ def load_everything():
         model,
         index,
         ids,
-        lookup
+        lookup,
+        checkpoint
     )
 
 
@@ -155,9 +155,22 @@ def load_everything():
     model,
     index,
     ids,
-    lookup
+    lookup,
+    checkpoint
 ) = load_everything()
 
+
+st.sidebar.success(
+    f"Epoch: {checkpoint['epoch']}"
+)
+
+st.sidebar.write(
+    f"Loss: {checkpoint['loss']:.4f}"
+)
+
+st.sidebar.write(
+    "Model: checkpoints_backup_old"
+)
 
 # =====================================================
 # SMILES LOOKUP
@@ -215,7 +228,7 @@ def embed_image(image):
 # =====================================================
 
 uploaded_file = st.file_uploader(
-    "Upload spectrum image",
+    "Upload IR spectrum image",
     type=["png", "jpg", "jpeg"]
 )
 
@@ -346,15 +359,87 @@ if uploaded_file is not None:
     # OVERLAY
     # =================================================
 
+     # =================================================
+    # OVERLAY
+    # =================================================
+
     st.subheader(
-        "Top-5 Retrieved Raman Spectra"
+        "Query vs Retrieved Spectra"
+    )
+
+    plot_options = [
+        "Uploaded Spectrum"
+    ] + [
+        f"Top-{i+1}: {names[i]}"
+        for i in range(5)
+    ]
+
+    selected_plots = st.multiselect(
+        "Select spectra to display",
+        options=plot_options,
+        default=plot_options
     )
 
     fig_overlay, ax_overlay = plt.subplots(
         figsize=(12, 6)
     )
 
+    # ---------------------------------
+    # Uploaded spectrum (black curve)
+    # ---------------------------------
+
+    query_np = np.array(image)
+
+    if len(query_np.shape) == 3:
+        query_np = query_np.mean(axis=2)
+
+    query_np = query_np.astype(np.float32)
+
+    query_np -= query_np.min()
+
+    if query_np.max() > 0:
+        query_np /= query_np.max()
+
+    query_x = np.linspace(
+        X_MIN,
+        X_MAX,
+        query_np.shape[1]
+    )
+
+    query_y = query_np.mean(axis=0)
+
+    # invert because dark peaks usually
+    # correspond to higher intensity
+
+    query_y = 1.0 - query_y
+
+    query_y -= query_y.min()
+
+    if query_y.max() > 0:
+        query_y /= query_y.max()
+
+    if "Uploaded Spectrum" in selected_plots:
+
+        ax_overlay.plot(
+            query_x,
+            query_y,
+            linewidth=5,
+            color="black",
+            alpha=0.9,
+            zorder=100,
+            label="Uploaded Spectrum"
+        )
+
+    # ---------------------------------
+    # Retrieved spectra
+    # ---------------------------------
+
     for rank in range(5):
+
+        label = plot_options[rank + 1]
+
+        if label not in selected_plots:
+            continue
 
         smi = retrieved_smiles[rank]
 
@@ -376,7 +461,7 @@ if uploaded_file is not None:
             spec,
             linewidth=2,
             alpha=0.8,
-            label=f"Top-{rank+1}"
+            label=f"{label} ({scores[rank]:.3f})"
         )
 
     ax_overlay.set_xlabel(
@@ -388,7 +473,7 @@ if uploaded_file is not None:
     )
 
     ax_overlay.set_title(
-        "Nearest Neighbors in Embedding Space"
+        "Uploaded Spectrum vs Retrieved Molecules"
     )
 
     ax_overlay.legend()

@@ -25,7 +25,10 @@ device = torch.device(
 
 print("Using:", device)
 
-os.makedirs("checkpoints", exist_ok=True)
+os.makedirs(
+    "checkpoints",
+    exist_ok=True
+)
 
 
 # =====================================================
@@ -38,7 +41,9 @@ full_dataset = ImageRetrievalDataset(
     mode="all"
 )
 
-indices = np.arange(len(full_dataset))
+indices = np.arange(
+    len(full_dataset)
+)
 
 train_idx, test_idx = train_test_split(
     indices,
@@ -67,7 +72,7 @@ dataset = Subset(
 
 loader = DataLoader(
     dataset,
-    batch_size=32,
+    batch_size=16,
     shuffle=True,
     num_workers=2,
     pin_memory=True,
@@ -79,7 +84,11 @@ loader = DataLoader(
 # TOKENIZER
 # =====================================================
 
-all_smiles = full_dataset.df["smiles"].astype(str).tolist()
+all_smiles = (
+    full_dataset.df["smiles"]
+    .astype(str)
+    .tolist()
+)
 
 tokenizer = SmilesTokenizer(
     all_smiles,
@@ -164,71 +173,122 @@ def contrastive_loss(
 # TRAINING
 # =====================================================
 
-epochs = 200
+epochs = 100
 
 best_loss = float("inf")
 
-for epoch in range(epochs):
+try:
 
-    model.train()
+    for epoch in range(epochs):
 
-    total_loss = 0.0
+        model.train()
 
-    for ir_img, raman_img, smiles in loader:
+        total_loss = 0.0
 
-        ir_img = ir_img.to(device)
-        raman_img = raman_img.to(device)
+        for ir_img, raman_img, smiles in loader:
 
-        smiles = tokenizer.batch_encode(
-            smiles
-        ).to(device)
+            ir_img = ir_img.to(device)
+            raman_img = raman_img.to(device)
 
-        z_img = model.encode_image(
-            ir_img,
-            raman_img
-        )
+            # =====================================
+            # MODALITY DROPOUT
+            # =====================================
 
-        z_txt = model.encode_smiles(
-            smiles
-        )
+            modality_rand = torch.rand(
+                1
+            ).item()
 
-        loss = contrastive_loss(
-            z_img,
-            z_txt
-        )
+            # 15% IR only
+            if modality_rand < 0.15:
 
-        optimizer.zero_grad()
+                raman_img = torch.zeros_like(
+                    raman_img
+                )
 
-        loss.backward()
+            # 15% Raman only
+            elif modality_rand < 0.30:
 
-        optimizer.step()
+                ir_img = torch.zeros_like(
+                    ir_img
+                )
 
-        total_loss += loss.item()
+            # Remaining 70%
+            # use both modalities
 
-    avg_loss = total_loss / len(loader)
+            smiles = tokenizer.batch_encode(
+                smiles
+            ).to(device)
 
-    print(
-        f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.4f}"
-    )
+            z_img = model.encode_image(
+                ir_img,
+                raman_img
+            )
 
-    if avg_loss < best_loss:
+            z_txt = model.encode_smiles(
+                smiles
+            )
 
-        best_loss = avg_loss
+            loss = contrastive_loss(
+                z_img,
+                z_txt
+            )
 
-        torch.save(
-            {
-                "epoch": epoch + 1,
-                "loss": best_loss,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "vocab_size": vocab_size
-            },
-            "checkpoints/best_model.pt"
+            optimizer.zero_grad()
+
+            loss.backward()
+
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_loss = (
+            total_loss /
+            len(loader)
         )
 
         print(
-            f"[BEST] Saved epoch {epoch+1}"
+            f"Epoch {epoch+1}/{epochs} | Loss: {avg_loss:.6f}"
         )
+
+        if avg_loss < best_loss:
+
+            best_loss = avg_loss
+
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "loss": best_loss,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "vocab_size": vocab_size
+                },
+                "checkpoints/best_model.pt"
+            )
+
+            print(
+                f"[BEST] Saved epoch {epoch+1}"
+            )
+
+except KeyboardInterrupt:
+
+    print(
+        "\nTraining interrupted by user."
+    )
+
+    torch.save(
+        {
+            "epoch": epoch + 1,
+            "loss": avg_loss,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "vocab_size": vocab_size
+        },
+        "checkpoints/interrupted_model.pt"
+    )
+
+    print(
+        "Saved interrupted_model.pt"
+    )
 
 
 # =====================================================
@@ -237,7 +297,7 @@ for epoch in range(epochs):
 
 torch.save(
     {
-        "epoch": epochs,
+        "epoch": epoch + 1,
         "loss": avg_loss,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
@@ -247,7 +307,6 @@ torch.save(
 )
 
 print()
-
 print("Saved:")
 print("checkpoints/best_model.pt")
 print("checkpoints/last_model.pt")

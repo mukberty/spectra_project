@@ -86,6 +86,55 @@ print(
     checkpoint["epoch"]
 )
 
+print("Testing embeddings...")
+
+ir_img, raman_img, smiles = next(iter(loader))
+
+ir_img = ir_img.to(device)
+raman_img = raman_img.to(device)
+
+with torch.no_grad():
+
+    z_img = model.encode_image(
+        ir_img,
+        raman_img
+    )
+
+    z_txt = model.encode_smiles(
+        tokenizer.batch_encode(smiles).to(device)
+    )
+
+print("Image embedding mean norm:",
+      z_img.norm(dim=1).mean().item())
+
+print("Text embedding mean norm:",
+      z_txt.norm(dim=1).mean().item())
+
+print("Image std:",
+      z_img.std().item())
+
+print("Text std:",
+      z_txt.std().item())
+
+with torch.no_grad():
+
+    sims = z_img @ z_txt.T
+
+diag = sims.diag()
+
+offdiag = (
+    sims.sum() - diag.sum()
+) / (
+    sims.numel() - len(diag)
+)
+
+print()
+print("Diagonal mean :", diag.mean().item())
+print("Diagonal max  :", diag.max().item())
+print("Diagonal min  :", diag.min().item())
+print()
+print("Offdiag mean  :", offdiag.item())
+
 
 # =====================================================
 # FAISS
@@ -150,9 +199,18 @@ for batch in loader:
     )
 
     _, retrieved_idx = index.search(
-        emb,
-        10
+        emb[:1],
+        20
     )
+    print("TRUE:")
+    print(smiles[0])
+
+    print("\nTOP20:")
+
+    for rank, idx in enumerate(retrieved_idx[0]):
+        print(rank + 1, ids[idx])
+    
+    break
 
     for i in range(len(smiles)):
 

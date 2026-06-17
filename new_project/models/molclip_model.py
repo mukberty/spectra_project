@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.image_cnn import ImageCNN
+#from models.image_cnn_doublenet import ImageCNN for the double net
 from models.smiles_encoder import SmilesEncoder
 
 
