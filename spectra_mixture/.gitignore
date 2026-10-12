@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Local archives
+archive/
+models_delete/
+utils_delete/
+
+# Large datasets
+data/processed/
+data/plots/
+
+# Checkpoints
+checkpoints/
+
+# Output folders
+outputs/
+
+# Generated images
+*_retrieval.png
+retrieval_overlay*.png
+molclip_umap.png
+
+# Temporary files
+*.tmp
+*.bak

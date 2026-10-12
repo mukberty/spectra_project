@@ -1,0 +1,128 @@
+================================================================================
+Verifying repository: spectra_mixture
+================================================================================
+
+Found 40 Python files.
+
+
+================================================================================
+1. LOCAL IMPORTS
+================================================================================
+evaluate_mixture.py
+    imports : molclip_model
+    missing : models/molclip_model.py
+models/molclip_model_mixture.py
+    imports : image_cnn_mixture
+    missing : models/image_cnn_mixture.py
+
+================================================================================
+2. REFERENCED FILES
+================================================================================
+build_mixture_index.py:87
+    checkpoints/molclip.index
+build_mixture_index.py:88
+    checkpoints/molclip_ids.npy
+create_lookup.py:25
+    checkpoints/mol_lookup.parquet
+create_lookup.py:40
+    checkpoints/mol_lookup.csv
+scripts/inspect_pkl.py:4
+    data/1.pkl
+
+================================================================================
+3. ABSOLUTE PATHS
+================================================================================
+verify.py:156
+    if "/mnt/" in line:
+
+================================================================================
+4. ../ REFERENCES
+================================================================================
+verify.py:177
+    print_section("4. ../ REFERENCES")
+verify.py:185
+    if "../" in line:
+verify.py:250
+    print(f"../ references          : {len(parent_hits)}")
+
+================================================================================
+5. ARCHIVE REFERENCES
+================================================================================
+verify.py:25
+    "archive",
+verify.py:26
+    "models_delete",
+verify.py:27
+    "utils_delete",
+verify.py:203
+    # 5. archive/_delete references
+verify.py:208
+    archive_hits = []
+verify.py:214
+    if "archive" in line or "_delete" in line:
+verify.py:216
+    archive_hits.append(
+verify.py:224
+    if not archive_hits:
+verify.py:225
+    print("✓ No archive/_delete references.")
+verify.py:227
+    for f, ln, line in archive_hits:
+verify.py:251
+    print(f"Archive references      : {len(archive_hits)}")
+
+================================================================================
+6. PYTHON FILES
+================================================================================
+build_mixture_index.py
+create_lookup.py
+create_split.py
+evaluate_mixture.py
+models/image_cnn_doublenet.py
+models/molclip_model_mixture.py
+models/smiles_encoder.py
+scripts/add_iupac_names.py
+scripts/create_curated_subset.py
+scripts/create_split.py
+scripts/evaluate_gnn_clean.py
+scripts/evaluate_gnn_contrastive.py
+scripts/evaluate_gnn_old.py
+scripts/evaluate_gnn_retrieval.py
+scripts/evaluate_model.py
+scripts/evaluate_retrieval.py
+scripts/export_raman_csv.py
+scripts/extract_embeddings.py
+scripts/filter_by_molecule_classes.py
+scripts/filter_by_molecule_classes_v2.py
+scripts/filter_dataset.py
+scripts/final_generator.py
+scripts/generate_continuous_spectra.py
+scripts/generate_morgan_fingerprints.py
+scripts/inspect_neighbors.py
+scripts/inspect_pkl.py
+scripts/plot_broadened_spectra.py
+scripts/plot_spectra.py
+scripts/prepare_training_data.py
+scripts/train_cnn.py
+scripts/train_contrastive_model.py
+scripts/train_gnn_contrastive.py
+scripts/visualize_contrastive_embeddings.py
+scripts/visualize_embeddings.py
+train_mixture.py
+utils/contrastive_loss.py
+utils/image_retrieval_dataset.py
+utils/mixture_dataset.py
+utils/smiles_tokenizer.py
+verify.py
+
+================================================================================
+SUMMARY
+================================================================================
+Python files            : 40
+Missing imports         : 2
+Missing referenced file : 5
+Absolute paths          : 1
+../ references          : 3
+Archive references      : 11
+
+❌ Repository is NOT yet self-contained.
